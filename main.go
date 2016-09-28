@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-type config struct {
+type simplogConfig struct {
 	logfile      string
 	isListening  bool
 	listenHost   string
@@ -25,6 +25,7 @@ type config struct {
 	addTimestamp bool
 	nodeName     string
 	period       time.Duration
+	debug        bool
 }
 
 type SendArgs struct {
@@ -37,24 +38,33 @@ type RpcEndpoint int
 
 var rpcClient *rpc.Client
 var wg sync.WaitGroup
+var config simplogConfig
 
 func main() {
-	config := set_flags()
+	set_flags()
+	if config.debug {
+		log.Printf("Config: %#v\n", config)
+	}
 
 	logChan = make(chan string, 10000)
-	go startLogWriter(logChan, config, &wg)
-	startListener(config)
-	startSender(config)
-	processStdin(logChan, config, &wg)
+	go startLogWriter(logChan, &wg)
+	startListener()
+	startSender()
+	processStdin(logChan, &wg)
+	if config.debug {
+		log.Print("Blocked on group waiting\n")
+	}
 	wg.Wait()
-	//os.Exit(0)
 }
 
-func startSender(config *config) {
+func startSender() {
 	if !config.isSending {
 		return
 	}
 
+	if config.debug {
+		log.Print("Starting RPC client\n")
+	}
 	var err error
 	rpcClient, err = rpc.DialHTTP("tcp", config.sendHost+":"+strconv.Itoa(config.sendPort))
 	if err != nil {
@@ -62,12 +72,14 @@ func startSender(config *config) {
 	}
 }
 
-func startListener(config *config) {
+func startListener() {
 	if !config.isListening {
 		return
 	}
 
-	//wg.Add(1) //not ends
+	if config.debug {
+		log.Print("Starting RPC server\n")
+	}
 	rpcEndpoint := new(RpcEndpoint)
 	rpc.Register(rpcEndpoint)
 	rpc.HandleHTTP()
@@ -79,15 +91,16 @@ func startListener(config *config) {
 }
 
 func (t *RpcEndpoint) Send(args *SendArgs, reply *int) error {
+	if config.debug {
+		log.Printf("Received new RPC Send call with args: %#v\n Sending new content to the log writer\n", args)
+	}
 	wg.Add(1)
 	logChan <- args.Content
 	*reply = 0
 	return nil
 }
 
-func set_flags() *config {
-	config := config{}
-
+func set_flags() {
 	flag.BoolVar(&config.isListening, "listen", false, "Description")
 	flag.StringVar(&config.listenHost, "listen-host", "localhost", "Description")
 	flag.IntVar(&config.listenPort, "listen-port", 22016, "Description")
@@ -98,28 +111,46 @@ func set_flags() *config {
 	flag.StringVar(&config.nodeName, "name", "", "Description")
 	flag.StringVar(&config.logfile, "logfile", "./simplog.log", "Description")
 	flag.DurationVar(&config.period, "period", time.Duration(24*365*42)*time.Hour, "Description 1d 1w")
+	flag.BoolVar(&config.debug, "debug", false, "Set the flag to enable internal logging")
 
 	flag.Parse()
-	return &config
 }
 
-func startLogWriter(records chan string, config *config, wg *sync.WaitGroup) {
+func startLogWriter(records chan string, wg *sync.WaitGroup) {
+	if config.debug {
+		log.Printf("Open logfile: %#v\n", config.logfile)
+	}
 	logFile, err := os.OpenFile(config.logfile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0664)
 	if err != nil {
 		panic("Can't open the log file \"" + config.logfile + "\". " + err.Error())
 	}
 
 	for {
+		if config.debug {
+			log.Print("Wait for new content for writing to logfile\n")
+		}
 		logRecord := <-records
+		if config.debug {
+			log.Printf("Received new content for writing to logfile: %#v\n", logRecord)
+		}
 		if config.isSending {
 			args := &SendArgs{logRecord}
 			var reply int
+			if config.debug {
+				log.Printf("Start RPC call with args: %#v\n", args)
+			}
 			err := rpcClient.Call("RpcEndpoint.Send", args, &reply)
 			if err != nil {
 				log.Fatal("Send log record error: ", err)
 			}
+			if config.debug {
+				log.Print("RPC call done successfuly\n", args)
+			}
 			wg.Done()
 			continue
+		}
+		if config.debug {
+			log.Print("Write new content to the logFile\n")
 		}
 		_, err := logFile.WriteString(logRecord)
 		if err != nil {
@@ -129,20 +160,32 @@ func startLogWriter(records chan string, config *config, wg *sync.WaitGroup) {
 	}
 }
 
-func processStdin(logChan chan string, config *config, wg *sync.WaitGroup) {
+func processStdin(logChan chan string, wg *sync.WaitGroup) {
+	if config.debug {
+		log.Print("Start processing stdin\n")
+	}
 	inReader := bufio.NewReader(os.Stdin)
 	for {
 		line, err := inReader.ReadString('\n')
+		if config.debug {
+			log.Printf("Received new line from stdin: %#v", line)
+		}
 		if err == io.EOF {
+			if config.debug {
+				log.Print("stdin EOF\n")
+			}
 			break
 		}
 
+		if config.debug {
+			log.Print("Sending the new line to the log writer\n")
+		}
 		wg.Add(1)
-		logChan <- makeLogString(line, config)
+		logChan <- makeLogString(line)
 	}
 }
 
-func makeLogString(text string, config *config) string {
+func makeLogString(text string) string {
 	logString := text
 
 	if config.nodeName != "" {
@@ -150,6 +193,9 @@ func makeLogString(text string, config *config) string {
 	}
 	if config.addTimestamp {
 		logString = time.Now().UTC().String() + " - " + logString
+	}
+	if config.debug {
+		log.Printf("Making the log string: from %#v to %#v \n", text, logString)
 	}
 
 	return logString
