@@ -4,7 +4,12 @@ import (
 	"bufio"
 	"flag"
 	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -22,16 +27,62 @@ type config struct {
 	period       time.Duration
 }
 
+type SendArgs struct {
+	Content string
+}
+
+var logChan chan string
+
+type RpcEndpoint int
+
+var rpcClient *rpc.Client
+var wg sync.WaitGroup
+
 func main() {
 	config := set_flags()
 
-	logChan := make(chan string, 10000)
-	var wg sync.WaitGroup
-
+	logChan = make(chan string, 10000)
 	go startLogWriter(logChan, config, &wg)
+	startListener(config)
+	startSender(config)
 	processStdin(logChan, config, &wg)
-
 	wg.Wait()
+	//os.Exit(0)
+}
+
+func startSender(config *config) {
+	if !config.isSending {
+		return
+	}
+
+	var err error
+	rpcClient, err = rpc.DialHTTP("tcp", config.sendHost+":"+strconv.Itoa(config.sendPort))
+	if err != nil {
+		log.Fatal("dialing:", err)
+	}
+}
+
+func startListener(config *config) {
+	if !config.isListening {
+		return
+	}
+
+	//wg.Add(1) //not ends
+	rpcEndpoint := new(RpcEndpoint)
+	rpc.Register(rpcEndpoint)
+	rpc.HandleHTTP()
+	l, err := net.Listen("tcp", config.listenHost+":"+strconv.Itoa(config.listenPort))
+	if err != nil {
+		log.Fatal("listen error:", err)
+	}
+	go http.Serve(l, nil)
+}
+
+func (t *RpcEndpoint) Send(args *SendArgs, reply *int) error {
+	wg.Add(1)
+	logChan <- args.Content
+	*reply = 0
+	return nil
 }
 
 func set_flags() *config {
@@ -60,6 +111,16 @@ func startLogWriter(records chan string, config *config, wg *sync.WaitGroup) {
 
 	for {
 		logRecord := <-records
+		if config.isSending {
+			args := &SendArgs{logRecord}
+			var reply int
+			err := rpcClient.Call("RpcEndpoint.Send", args, &reply)
+			if err != nil {
+				log.Fatal("Send log record error: ", err)
+			}
+			wg.Done()
+			continue
+		}
 		_, err := logFile.WriteString(logRecord)
 		if err != nil {
 			panic("Can't write to the log file. " + err.Error())
