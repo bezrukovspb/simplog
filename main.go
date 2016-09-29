@@ -95,7 +95,7 @@ func (t *RpcEndpoint) Send(args *SendArgs, reply *int) error {
 		log.Printf("Received new RPC Send call with args: %#v\n Sending new content to the log writer\n", args)
 	}
 	wg.Add(1)
-	logChan <- args.Content
+	logChan <- makeLogString(args.Content)
 	*reply = 0
 	return nil
 }
@@ -191,7 +191,7 @@ func makeLogString(text string) string {
 	if config.nodeName != "" {
 		logString = config.nodeName + ": " + logString
 	}
-	if config.addTimestamp {
+	if config.addTimestamp && !config.isSending {
 		logString = time.Now().UTC().String() + " - " + logString
 	}
 	if config.debug {
