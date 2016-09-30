@@ -88,6 +88,7 @@ func startListener() {
 		log.Fatal("listen error:", err)
 	}
 	go http.Serve(l, nil)
+	wg.Add(1)
 }
 
 func (t *RpcEndpoint) Send(args *SendArgs, reply *int) error {
