@@ -42,19 +42,21 @@ var config simplogConfig
 
 func main() {
 	set_flags()
-	if config.debug {
-		log.Printf("Config: %#v\n", config)
-	}
+	debuglog("Config: %#v", config)
 
 	logChan = make(chan string, 10000)
 	go startLogWriter(logChan, &wg)
 	startListener()
 	startSender()
 	processStdin(logChan, &wg)
-	if config.debug {
-		log.Print("Blocked on group waiting\n")
-	}
+	debuglog("Blocked on group waiting")
 	wg.Wait()
+}
+
+func debuglog(message string, args ...interface{}) {
+	if config.debug {
+		log.Printf(message+"\n", args...)
+	}
 }
 
 func startSender() {
@@ -62,9 +64,7 @@ func startSender() {
 		return
 	}
 
-	if config.debug {
-		log.Print("Starting RPC client\n")
-	}
+	debuglog("Starting RPC client")
 	var err error
 	rpcClient, err = rpc.DialHTTP("tcp", config.sendHost+":"+strconv.Itoa(config.sendPort))
 	if err != nil {
@@ -77,9 +77,7 @@ func startListener() {
 		return
 	}
 
-	if config.debug {
-		log.Print("Starting RPC server\n")
-	}
+	debuglog("Starting RPC server")
 	rpcEndpoint := new(RpcEndpoint)
 	rpc.Register(rpcEndpoint)
 	rpc.HandleHTTP()
@@ -92,9 +90,7 @@ func startListener() {
 }
 
 func (t *RpcEndpoint) Send(args *SendArgs, reply *int) error {
-	if config.debug {
-		log.Printf("Received new RPC Send call with args: %#v\n Sending new content to the log writer\n", args)
-	}
+	debuglog("Received new RPC Send call with args: %#v\n Sending new content to the log writer", args)
 	wg.Add(1)
 	logChan <- makeLogString(args.Content)
 	*reply = 0
@@ -118,41 +114,29 @@ func set_flags() {
 }
 
 func startLogWriter(records chan string, wg *sync.WaitGroup) {
-	if config.debug {
-		log.Printf("Open logfile: %#v\n", config.logfile)
-	}
+	debuglog("Open logfile: %#v", config.logfile)
 	logFile, err := os.OpenFile(config.logfile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0664)
 	if err != nil {
 		panic("Can't open the log file \"" + config.logfile + "\". " + err.Error())
 	}
 
 	for {
-		if config.debug {
-			log.Print("Wait for new content for writing to logfile\n")
-		}
+		debuglog("Wait for new content for writing to logfile")
 		logRecord := <-records
-		if config.debug {
-			log.Printf("Received new content for writing to logfile: %#v\n", logRecord)
-		}
+		debuglog("Received new content for writing to logfile: %#v", logRecord)
 		if config.isSending {
 			args := &SendArgs{logRecord}
 			var reply int
-			if config.debug {
-				log.Printf("Start RPC call with args: %#v\n", args)
-			}
+			debuglog("Start RPC call with args: %#v", args)
 			err := rpcClient.Call("RpcEndpoint.Send", args, &reply)
 			if err != nil {
 				log.Fatal("Send log record error: ", err)
 			}
-			if config.debug {
-				log.Print("RPC call done successfuly\n", args)
-			}
+			debuglog("RPC call done successfuly", args)
 			wg.Done()
 			continue
 		}
-		if config.debug {
-			log.Print("Write new content to the logFile\n")
-		}
+		debuglog("Write new content to the logFile")
 		_, err := logFile.WriteString(logRecord)
 		if err != nil {
 			panic("Can't write to the log file. " + err.Error())
@@ -162,25 +146,17 @@ func startLogWriter(records chan string, wg *sync.WaitGroup) {
 }
 
 func processStdin(logChan chan string, wg *sync.WaitGroup) {
-	if config.debug {
-		log.Print("Start processing stdin\n")
-	}
+	debuglog("Start processing stdin")
 	inReader := bufio.NewReader(os.Stdin)
 	for {
 		line, err := inReader.ReadString('\n')
-		if config.debug {
-			log.Printf("Received new line from stdin: %#v", line)
-		}
+		debuglog("Received new line from stdin: %#v", line)
 		if err == io.EOF {
-			if config.debug {
-				log.Print("stdin EOF\n")
-			}
+			debuglog("stdin EOF")
 			break
 		}
 
-		if config.debug {
-			log.Print("Sending the new line to the log writer\n")
-		}
+		debuglog("Sending the new line to the log writer")
 		wg.Add(1)
 		logChan <- makeLogString(line)
 	}
@@ -195,9 +171,7 @@ func makeLogString(text string) string {
 	if config.addTimestamp && !config.isSending {
 		logString = time.Now().UTC().String() + " - " + logString
 	}
-	if config.debug {
-		log.Printf("Making the log string: from %#v to %#v \n", text, logString)
-	}
+	debuglog("Making the log string: from %#v to %#v", text, logString)
 
 	return logString
 }
